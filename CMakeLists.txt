@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.10...3.27)
 project(system_data_recorder)
 
 if(NOT CMAKE_CXX_STANDARD)
@@ -53,6 +53,11 @@ install(TARGETS
   system_data_recorder
   DESTINATION lib/${PROJECT_NAME}
 )
+
+# Install launch, config directories
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
