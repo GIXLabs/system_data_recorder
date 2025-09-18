@@ -19,9 +19,10 @@
 #include <filesystem>
 #include <queue>
 #include <string>
+#include <chrono>  // For timestamping
+#include <iomanip> // For formatting the timestamp
 
 #include "sdr/visibility_control.h"
-
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "rosbag2_cpp/writer.hpp"
@@ -30,126 +31,91 @@
 namespace sdr
 {
 
-class SystemDataRecorder : public rclcpp_lifecycle::LifecycleNode
-{
-public:
-  /// Constructor
-  ///
-  /// @param node_name The graph name to use for the SDR node
-  /// @param options The options to construct the node with
-  /// @param bag_uri The relative or full path to where the bag will be stored during recording.
-  /// Must not exist.
-  /// @param copy_destination The relative or full path to where the bag files will be copied. Must
-  /// not exist.
-  /// @param max_file_size The maximum size of each individual file in the bag, in bytes. This
-  /// should be tuned based on the time to copy each file, how often the backup files should be
-  /// copied, how fast data is coming in, etc.
-  /// @param topics_and_types A map of topics to record and their types. Keys of the map are topic
-  /// names, values of the map are the topic types, e.g. "example_interfaces/msg/String".
-  SDR_PUBLIC
-  SystemDataRecorder(
-    const std::string & node_name,
-    const rclcpp::NodeOptions & options,
-    const std::string & bag_uri,
-    const std::string & copy_destination,
-    const unsigned int max_file_size,
-    const std::unordered_map<std::string, std::string> & topics_and_types);
-
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  // Lifecycle states
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  SDR_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_configure(const rclcpp_lifecycle::State & state);
-
-  SDR_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_activate(const rclcpp_lifecycle::State & state);
-
-  SDR_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_deactivate(const rclcpp_lifecycle::State & state);
-
-  SDR_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_cleanup(const rclcpp_lifecycle::State & state);
-
-  SDR_PUBLIC
-  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
-  on_shutdown(const rclcpp_lifecycle::State & state);
-
-private:
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  // Variables and functions for the record functionality
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-
-  // Options for the bag storage
-  rosbag2_storage::StorageOptions storage_options_;
-  // The topics that will be recorded, and their types
-  std::unordered_map<std::string, std::string> topics_and_types_;
-  // A map from topic names to subscriber entities
-  std::unordered_map<std::string, std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
-
-  // This writer does the actual storing of data during recording
-  std::shared_ptr<rosbag2_cpp::Writer> writer_;
-
-  void start_recording();
-  void stop_recording();
-  void pause_recording();
-  void unpause_recording();
-
-  void subscribe_to_topics();
-  void subscribe_to_topic(const std::string & topic, const std::string & type);
-  std::string get_serialised_offered_qos_for_topic(const std::string & topic);
-  rclcpp::QoS get_appropriate_qos_for_topic(const std::string & topic);
-  void unsubscribe_from_topics();
-
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-  // Variables and functions for the file-copying thread and functionality
-  /////////////////////////////////////////////////////////////////////////////////////////////////
-
-  // This is used to pass state-change messages from the node to the file-copying worker thread
-  enum class SdrStateChange
+  // A struct to hold information for the file-copying thread
+  struct FileCopyJob
   {
-    NO_CHANGE,
-    PAUSED,
-    RECORDING,
-    FINISHED
+    std::string source_path;
+    std::filesystem::path destination_path;
   };
 
-  // This variable holds the message to send to the worker thread
-  SdrStateChange state_msg_ = SdrStateChange::NO_CHANGE;
-  // This queue passes bag files that need to be copied to the worker thread
-  std::queue<std::string> files_to_copy_;
-  // This mutex protects the two above variables
-  std::mutex copy_thread_mutex_;
-  // This condition variable is used to wake up the worker thread when there is a new state-change
-  // message or there are files to copy
-  std::condition_variable copy_thread_wake_cv_;
-  // The worker thread
-  std::shared_ptr<std::thread> copy_thread_;
+  class SystemDataRecorder : public rclcpp_lifecycle::LifecycleNode
+  {
+  public:
+    SDR_PUBLIC
+    explicit SystemDataRecorder(const rclcpp::NodeOptions &options);
 
-  void copy_thread_main();
-  bool copy_thread_should_wake();
-  void notify_state_change(SdrStateChange new_state);
-  void notify_new_file_to_copy(const std::string & file_uri);
-  void notify_new_file_to_copy(const std::filesystem::path & file_path);
+    SDR_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_configure(const rclcpp_lifecycle::State &state);
 
-  // The source directory is the location of the bag, i.e. where bag files are copied from
-  std::filesystem::path source_directory_;
-  // The destination directory where bag files will be copied to
-  std::filesystem::path destination_directory_;
-  // The name of the final file in the bag; no event notification will be received when recording
-  // stops because there is no "stop recording" concept in rosbag2, you simply stop passing data to
-  // the writer. So we need to store the name of the final file and copy it during cleanup.
-  std::string last_bag_file_ = "";
-  // Prevent multiple cleanup
-  bool cleaned_up = true;
+    SDR_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_activate(const rclcpp_lifecycle::State &state);
 
-  bool create_copy_destination();
-  void copy_bag_file(const std::string & bag_file_name);
-};
+    SDR_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_deactivate(const rclcpp_lifecycle::State &state);
 
-}  // namespace sdr
+    SDR_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_cleanup(const rclcpp_lifecycle::State &state);
 
-#endif  // SDR__SDR_COMPONENT_HPP__
+    SDR_PUBLIC
+    rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+    on_shutdown(const rclcpp_lifecycle::State &state);
+
+  private:
+    // Parameter loading
+    bool read_parameters();
+
+    // Helper function to get a formatted timestamp string
+    std::string generate_timestamp();
+
+    // Bag recording functionality
+    void subscribe_to_topics();
+    void subscribe_to_topic(const std::string &topic, const std::string &type);
+    void unsubscribe_from_topics();
+    std::string get_serialised_offered_qos_for_topic(const std::string &topic);
+    rclcpp::QoS get_appropriate_qos_for_topic(const std::string &topic);
+
+    rosbag2_storage::StorageOptions storage_options_;
+    std::unordered_map<std::string, std::string> topics_and_types_;
+    std::unordered_map<std::string, std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
+    std::shared_ptr<rosbag2_cpp::Writer> writer_;
+
+    // File-copying functionality
+    enum class SdrStateChange
+    {
+      NO_CHANGE,
+      PAUSED,
+      RECORDING,
+      FINISHED
+    };
+
+    SdrStateChange state_msg_ = SdrStateChange::NO_CHANGE;
+    std::queue<FileCopyJob> files_to_copy_; // Queue now holds jobs
+    std::mutex copy_thread_mutex_;
+    std::condition_variable copy_thread_wake_cv_;
+    std::shared_ptr<std::thread> copy_thread_;
+
+    void copy_thread_main();
+    bool copy_thread_should_wake();
+    void notify_state_change(SdrStateChange new_state);
+    void notify_new_file_to_copy(const FileCopyJob &job);
+    void copy_bag_file(const FileCopyJob &job);
+
+    // Base configuration loaded from parameters
+    std::string base_bag_name_prefix_;
+    std::filesystem::path base_copy_destination_;
+
+    // Session-specific paths, valid during an active recording
+    std::filesystem::path session_destination_directory_; // The main folder for this run
+    std::filesystem::path current_bag_tmp_directory_;     // Temp folder for the current bag
+    std::filesystem::path current_bag_final_destination_; // Final folder for the current bag
+    std::string last_bag_file_ = "";
+    bool cleaned_up = true;
+  };
+
+} // namespace sdr
+
+#endif // SDR__SDR_COMPONENT_HPP__
