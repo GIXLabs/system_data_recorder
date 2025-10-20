@@ -157,3 +157,41 @@ Ensures the last active recording session is properly deactivated and finalized.
 ### on_shutdown
 
 Performs the same actions as `on_cleanup` before shutting down the node.
+
+
+---
+
+## Keyboard Commander Utility
+
+For manual control and testing, an `SDRKeyboardCommander` node is available. This node listens for keyboard presses and sends the corresponding lifecycle transition requests to the `/sdr` node.
+
+
+### Running
+
+1.  In one terminal, run your `sdr` node:
+
+    ```bash
+    ros2 launch system_data_recorder sdr_example.launch.py
+    ```
+
+2.  In a second terminal, source your workspace and run the commander:
+
+    ```bash
+    ros2 run system_data_recorder sdr_commander
+    ```
+
+### Controls
+
+Once the commander node is running and connected to the `/sdr` services, you can use the following keys to control the recorder:
+
+| Key | Action | Lifecycle Transition |
+| :--- | :--- | :--- |
+| **c** | Configure | `CONFIGURE` |
+| **a** | Activate | `ACTIVATE` (Starts recording) |
+| **d** | Deactivate | `DEACTIVATE` (Pauses recording) |
+| **l** | Cleanup | `CLEANUP` |
+| **s** | Shutdown | `SHUTDOWN` |
+| **g** | Get State | (Queries and prints the current state) |
+| **h** | Help | (Prints the help menu) |
+| **q** | Quit | (Shuts down the commander node) |
+
