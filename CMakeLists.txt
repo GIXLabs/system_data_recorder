@@ -37,10 +37,22 @@ ament_target_dependencies(sdr_component
 rclcpp_components_register_nodes(sdr_component "sdr::SystemDataRecorder")
 
 add_executable(system_data_recorder src/system_data_recorder.cpp)
+add_executable(sdr_commander_main
+  src/sdr_commander_main.cpp
+  src/sdr_keyboard_commander.cpp
+)
+
 target_link_libraries(system_data_recorder sdr_component)
+
 ament_target_dependencies(system_data_recorder
   rclcpp
 )
+
+ament_target_dependencies(sdr_commander_main
+  rclcpp
+  lifecycle_msgs
+)
+
 
 install(TARGETS
   sdr_component
@@ -51,6 +63,11 @@ install(TARGETS
 
 install(TARGETS
   system_data_recorder
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS
+  sdr_commander_main
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -71,3 +88,7 @@ if(BUILD_TESTING)
 endif()
 
 ament_package()
+
+
+
+
