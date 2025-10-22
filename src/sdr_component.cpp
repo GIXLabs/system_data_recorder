@@ -20,6 +20,8 @@
 #include "rosbag2_transport/qos.hpp"
 #include "yaml-cpp/yaml.h"
 
+
+
 namespace sdr
 {
 
@@ -111,6 +113,198 @@ namespace sdr
         return ss.str();
     }
 
+
+    void SystemDataRecorder::write_all_nodes_parameters_yaml(const std::filesystem::path& out_file)
+{
+  YAML::Node root;
+
+  // Local helper node; not added to any executor
+  auto query_node = std::make_shared<rclcpp::Node>(
+      std::string(this->get_name()) + "_param_query",
+      this->get_namespace(),
+      rclcpp::NodeOptions()
+          .context(this->get_node_base_interface()->get_context())
+          .start_parameter_services(false)
+          .start_parameter_event_publisher(false)
+          .use_intra_process_comms(false)
+  );
+
+  auto make_fqn = [](const std::string& ns, const std::string& name) {
+    if (ns.empty() || ns == "/") return std::string("/") + name;
+    return ns + "/" + name;
+  };
+  const std::string self_fqn = make_fqn(this->get_namespace(), this->get_name());
+
+  auto name_ns_pairs = this->get_node_graph_interface()->get_node_names_and_namespaces();
+  std::sort(name_ns_pairs.begin(), name_ns_pairs.end(),
+            [](const auto& a, const auto& b) {
+              if (a.second == b.second) return a.first < b.first;
+              return a.second < b.second;
+            });
+
+  for (const auto& nmns : name_ns_pairs) {
+    const auto& name = nmns.first;
+    const auto& ns   = nmns.second;
+    const auto fqn   = make_fqn(ns, name);
+
+    if (fqn == self_fqn) continue;                 // skip our own node
+    if (!name.empty() && name[0] == '_') continue; // optional: skip hidden nodes
+
+    auto client = std::make_shared<rclcpp::SyncParametersClient>(query_node.get(), fqn);
+
+    if (!client->wait_for_service(std::chrono::milliseconds(300))) {
+      RCLCPP_WARN(get_logger(), "Param service not available for node %s, skipping.", fqn.c_str());
+      continue;
+    }
+
+    // 1) List declared parameter names (depth is generous)
+    rcl_interfaces::msg::ListParametersResult list_res;
+    try {
+            list_res = client->list_parameters(
+                {}, 
+                rcl_interfaces::srv::ListParameters::Request::DEPTH_RECURSIVE
+            );
+
+            // --- ADD THIS LOGGING BLOCK ---
+            RCLCPP_INFO(get_logger(), "--- DEBUG PARAMS FOR NODE: %s ---", fqn.c_str());
+            std::string names_str = "Names: [";
+            for (const auto& name : list_res.names) {
+                names_str += "\"" + name + "\", ";
+            }
+            names_str += "]";
+            RCLCPP_INFO(get_logger(), "%s", names_str.c_str());
+            // --- END LOGGING BLOCK ---
+    } catch (const std::exception& e) {
+      RCLCPP_WARN(get_logger(), "list_parameters failed for %s: %s", fqn.c_str(), e.what());
+      continue;
+    }
+
+    const auto& names = list_res.names;
+    if (names.empty()) continue;
+
+    YAML::Node params_node(YAML::NodeType::Map);
+
+    // 2) Fetch each parameter **individually**
+    for (const auto& full_name : names) {
+        // FIX: Changed "qos_overrides." to "qos_overrides"
+        // Your log showed "qos_overrides./..." so this will catch it
+        if (full_name.rfind("qos_overrides", 0) == 0) {
+        continue; // skip QoS noise
+        }
+
+        rclcpp::Parameter param;
+        try {
+        auto vec = client->get_parameters({full_name});
+        if (!vec.empty()) {
+            param = vec.front();
+        } else {
+            // If the server gives nothing back, still create a null entry
+            std::stringstream ss(full_name);
+            std::string key;
+            std::vector<std::string> keys;
+            while (std::getline(ss, key, '.')) if (!key.empty()) keys.push_back(key);
+            
+            // --- FIX: Use a reference, not a pointer ---
+            YAML::Node& current_ref = params_node;
+            for (size_t k = 0; k + 1 < keys.size(); ++k) {
+                current_ref = current_ref[keys[k]]; // Re-assign reference to child
+            }
+            current_ref[keys.back()] = YAML::Node();  // null
+            // --- END FIX ---
+            continue;
+        }
+        } catch (const std::exception& e) {
+        RCLCPP_WARN(get_logger(), "get_parameters(%s) failed for %s: %s",
+                    full_name.c_str(), fqn.c_str(), e.what());
+        continue;
+        }
+
+        // 3) Build nested YAML using the **full** dotted name
+        std::stringstream ss(full_name);
+        std::string key;
+        std::vector<std::string> keys;
+        while (std::getline(ss, key, '.')) if (!key.empty()) keys.push_back(key);
+
+        YAML::Node value_node;
+        write_yaml_value_from_param(value_node, param);
+
+        if (keys.empty()) {
+            params_node[full_name] = value_node;
+        } else {
+            // Recursively build nested structure
+            std::function<void(YAML::Node&, size_t)> build_nested = 
+                [&](YAML::Node& node, size_t depth) {
+                    if (depth == keys.size() - 1) {
+                        // Last key, set the value
+                        node[keys[depth]] = value_node;
+                    } else {
+                        // Intermediate key, ensure it's a Map and recurse
+                        if (!node[keys[depth]].IsDefined() || !node[keys[depth]].IsMap()) {
+                            node[keys[depth]] = YAML::Node(YAML::NodeType::Map);
+                        }
+                        YAML::Node child = node[keys[depth]];
+                        build_nested(child, depth + 1);
+                        node[keys[depth]] = child; // Write back the modified child
+                    }
+                };
+            
+            build_nested(params_node, 0);
+        }
+    }
+    YAML::Node node_root;
+    node_root["node_name"] = name;
+    node_root["node_namespace"] = ns;
+    node_root["parameters"] = params_node;
+
+    root[fqn] = node_root;
+  }
+
+  try {
+    std::ofstream ofs(out_file);
+    ofs << root;
+    ofs.close();
+    RCLCPP_INFO_STREAM(get_logger(), "Wrote ALL nodes parameters YAML: " << out_file);
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(get_logger(), "Failed writing ALL nodes parameters YAML to '%s': %s",
+                 out_file.c_str(), e.what());
+  }
+
+  query_node.reset();  // ensure destruction before return
+}
+
+
+
+    void SystemDataRecorder::write_yaml_value_from_param(YAML::Node& node, const rclcpp::Parameter& p)
+    {
+    using rclcpp::ParameterType;
+
+    switch (p.get_type()) {
+        case ParameterType::PARAMETER_BOOL:           node = p.as_bool(); break;
+        case ParameterType::PARAMETER_INTEGER:        node = p.as_int(); break;
+        case ParameterType::PARAMETER_DOUBLE:         node = p.as_double(); break;
+        case ParameterType::PARAMETER_STRING:         node = p.as_string(); break;
+        case ParameterType::PARAMETER_BYTE_ARRAY: {
+        YAML::Node seq; for (auto b : p.as_byte_array()) seq.push_back(static_cast<int>(b)); node = seq; break;
+        }
+        case ParameterType::PARAMETER_BOOL_ARRAY: {
+        YAML::Node seq; for (auto v : p.as_bool_array()) seq.push_back(v); node = seq; break;
+        }
+        case ParameterType::PARAMETER_INTEGER_ARRAY: {
+        YAML::Node seq; for (auto v : p.as_integer_array()) seq.push_back(v); node = seq; break;
+        }
+        case ParameterType::PARAMETER_DOUBLE_ARRAY: {
+        YAML::Node seq; for (auto v : p.as_double_array()) seq.push_back(v); node = seq; break;
+        }
+        case ParameterType::PARAMETER_STRING_ARRAY: {
+        YAML::Node seq; for (auto& v : p.as_string_array()) seq.push_back(v); node = seq; break;
+        }
+        case ParameterType::PARAMETER_NOT_SET:
+        default: node = YAML::Node(); break;
+    }
+    }
+
+
+
     rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
     SystemDataRecorder::on_configure(const rclcpp_lifecycle::State &)
     {
@@ -133,9 +327,11 @@ namespace sdr
         RCLCPP_INFO(
             get_logger(), "All copied bags for this session will be stored in: %s",
             session_destination_directory_.c_str());
+        
 
+        // Start the file-copying thread
         copy_thread_ = std::make_shared<std::thread>([this]
-                                                     { this->copy_thread_main(); });
+                                                    { this->copy_thread_main(); });
         notify_state_change(SdrStateChange::PAUSED);
         cleaned_up = false;
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
@@ -162,6 +358,9 @@ namespace sdr
             std::filesystem::remove_all(current_bag_tmp_directory_);
         }
         std::filesystem::create_directories(current_bag_final_destination_);
+
+        const auto params_yaml_path = current_bag_final_destination_ / "rosparams.yaml";
+        write_all_nodes_parameters_yaml(params_yaml_path);
 
         writer_ = std::make_shared<rosbag2_cpp::Writer>(
             std::make_unique<rosbag2_cpp::writers::SequentialWriter>());
@@ -214,6 +413,7 @@ namespace sdr
             copy_thread_->join();
             copy_thread_.reset();
         }
+
         cleaned_up = true;
         RCLCPP_INFO(get_logger(), "Cleanup complete.");
         return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;

@@ -21,6 +21,10 @@
 #include <string>
 #include <chrono>  // For timestamping
 #include <iomanip> // For formatting the timestamp
+#include <algorithm>
+#include <fstream>
+#include "rclcpp/parameter_client.hpp"
+
 
 #include "sdr/visibility_control.h"
 #include "rclcpp/rclcpp.hpp"
@@ -75,6 +79,12 @@ namespace sdr
     void subscribe_to_topics();
     void subscribe_to_topic(const std::string &topic, const std::string &type);
     void unsubscribe_from_topics();
+    
+    // Parameter querying functionality
+    void write_all_nodes_parameters_yaml(const std::filesystem::path& out_file);
+    void write_yaml_value_from_param(YAML::Node& node, const rclcpp::Parameter& p);
+
+
     std::string get_serialised_offered_qos_for_topic(const std::string &topic);
     rclcpp::QoS get_appropriate_qos_for_topic(const std::string &topic);
 
