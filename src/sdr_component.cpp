@@ -24,7 +24,7 @@
 
 namespace sdr
 {
-
+ 
     SystemDataRecorder::SystemDataRecorder(const rclcpp::NodeOptions &options)
         : rclcpp_lifecycle::LifecycleNode("sdr", options)
     {
