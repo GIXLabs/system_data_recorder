@@ -22,7 +22,7 @@
 #include "rosbag2_cpp/writer.hpp"
 #include "rosbag2_transport/recorder.hpp"
 
-int main(int argc, char *argv[])
+int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
   rclcpp::executors::SingleThreadedExecutor exec;
