@@ -166,15 +166,6 @@ void SystemDataRecorder::write_all_nodes_parameters_yaml(const std::filesystem::
         rcl_interfaces::srv::ListParameters::Request::DEPTH_RECURSIVE
       );
 
-      // --- ADD THIS LOGGING BLOCK ---
-      RCLCPP_INFO(get_logger(), "--- DEBUG PARAMS FOR NODE: %s ---", fqn.c_str());
-      std::string names_str = "Names: [";
-      for (const auto & name : list_res.names) {
-        names_str += "\"" + name + "\", ";
-      }
-      names_str += "]";
-      RCLCPP_INFO(get_logger(), "%s", names_str.c_str());
-      // --- END LOGGING BLOCK ---
     } catch (const std::exception & e) {
       RCLCPP_WARN(get_logger(), "list_parameters failed for %s: %s", fqn.c_str(), e.what());
       continue;
