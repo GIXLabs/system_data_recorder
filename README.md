@@ -1,129 +1,197 @@
 # System Data Recorder (SDR)
 
-
-A lifecycle node and executable for recording topic data to a rosbag2 bag, while simultaneously copying the split bag files to another location as each bag file is completed.
+A lifecycle node for recording multiple, distinct rosbag2 bags sessions, while simultaneously copying the split bag files to another location as each bag file is completed.
 This is useful, for example, to copy bag data files to an external disc during recording as each data file is completed, rather than waiting until all data is recorded before copying the entire bag at once (an operation that can take a significant time if the bag is large).
 
 The copying function requires that a maximum file size for bag files be enabled.
 Otherwise no splitting will be performed and the files will not be copied until recording is terminated.
 
+## Configuration
 
-## Compilation
+The SDR is configured using a YAML parameter file, which is loaded via a ROS 2 launch file. This is the recommended way to run the node.
 
-The SDR requires two features not yet available in the rosbag2 main branch or binary releases.
-You will need to compile rosbag2 from source, applying the following two pull requests to the source prior to compiling it.
+#### Parameters
 
-1. [Expose the QoS object wrapper](https://github.com/ros2/rosbag2/pull/910)
-2. [Notification of significant events during bag recording and playback](https://github.com/ros2/rosbag2/pull/908)
+* `bag_name_prefix` (string): The base name for each bag file. A timestamp will be appended to this (e.g., `"recording"` becomes `"recording_2025-07-10_02-30-00"`).
+* `copy_destination` (string): The parent directory where all recording session folders will be saved.
+* `max_file_size` (int): The maximum size in bytes for an individual `.db3` file before it is split. A value greater than `0` is required for the copy-on-split feature to work.
+* `topic_names` (string array): A list of topics to record.
+* `topic_types` (string array): A corresponding list of message types for the topics.
 
-Create a `colcon` workspace with the [SDR source code](https://github.com/osrf/system_data_recorder) in it, and compile the workspace.
+#### Example `sdr_example.yaml`
 
+```yaml
+sdr:
+  ros__parameters:
+    # The base name for each bag file. A timestamp will be appended to this.
+    bag_name_prefix: "robot_data"
+
+    # The parent directory where all recording session folders will be saved.
+    copy_destination: "/home/user/sdr_bags"
+
+    # Maximum size of each individual .db3 file in bytes before splitting.
+    max_file_size: 268435456  # 256 MiB
+
+    # List of topics and their types to record.
+    topic_names: [
+      "/chatter",
+      "/diagnostics"
+    ]
+    topic_types: [
+      "std_msgs/msg/String",
+      "diagnostic_msgs/msg/DiagnosticArray"
+    ]
+```
 
 ## Use
 
 ### Lifecycle management
 
-Run the executable to start the node.
+Run the executable using a launch file that loads your parameters. For example:
+`ros2 launch system_data_recorder sdr_example.launch.py`
 
-    ros2 run system_data_recorder system_data_recorder
+In a separate terminal, use the lifecycle manager to control the node.
 
-In a separate terminal, use the lifecycle manager to configure and activate the node.
+1. **Configure the node.**
+This sets up the main session directory and prepares the node for recording. This is done only once.
 
-    ros2 lifecycle set sdr configure
-    ros2 lifecycle set sdr activate
+```bash
+ros2 lifecycle set /sdr configure
+```
 
-This will enable recording of data to the bag.
-To pause recording, deactivate the node.
+2. **Activate to start recording.**
+This begins a new, timestamped bag recording.
 
-    ros2 lifecycle set sdr deactivate
+```bash
+ros2 lifecycle set /sdr activate
+```
 
-From here, recording can be resumed by re-activating the node, or recording can be terminated by cleaning up the node.
+3. **Deactivate to stop recording.**
+This finalizes the current bag and copies its files to the permanent destination.
 
-    ros2 lifecycle set sdr cleanup
+```bash
+ros2 lifecycle set /sdr deactivate
+```
 
-Once cleaned up, the node will copy the final files of the bag, as well as any metadata, to the backup destination.
+You can repeat steps 2 and 3 as many times as you like to create multiple, separate bag files within the same run.
 
-### Configuring
+4. **Cleanup the node.**
+This stops the background threads and cleans up resources.
 
-The SDR is configured by the arguments passed to the node's constructor.
-These are not currently exposed as command line arguments or ROS parameters, so they must be changed in the source code.
-See the constructor's documentation block for the possible parameters.
+```bash
+ros2 lifecycle set /sdr cleanup
+```
 
-By default, the SDR will:
+5. **Shutdown the node.**
 
-- Record from the `/chatter` topic, expecting `std_msgs/msg/String` data.
-- Record to a bag named `test_bag`.
-- Copy bag files to the directory `copied_bag/test_bag`.
-- Split bag files every 100,000 bytes.
+```bash
+ros2 lifecycle set /sdr shutdown
+```
 
-### A simple test
+### A Simple Test
 
-In one terminal, start publishing data on the `/chatter` topic.
+1. In one terminal, start publishing data:
 
-    ros2 run demo_nodes_cpp talker
+```bash
+ros2 launch system_data_recorder sdr_example.launch.py
+```
 
-In another terminal, start the SDR node.
+2. In another terminal, launch the SDR node with your parameters:
 
-    ros2 run system_data_recorder system_data_recorder
+```bash
+ros2 launch your_package_name your_launch_file.py
+```
 
-In a third terminal, configure and activate the SDR.
+3. In a third terminal, configure the SDR, then activate it to start the first recording:
 
-    ros2 lifecycle set sdr configure
-    ros2 lifecycle set sdr activate
+```bash
+ros2 lifecycle set /sdr configure
+ros2 lifecycle set /sdr activate
+```
 
-Wait a minute or two for 100,000 bytes of data to be recorded.
-Navigate to the directory `copied_bag` and observe that there is a `test_bag`
-directory containing the first data file of the bag.
+4. After some time, deactivate it to save the first bag:
 
-Deactivate and cleanup the SDR.
+```bash
+ros2 lifecycle set /sdr deactivate
+```
 
-    ros2 lifecycle set sdr deactivate
-    ros2 lifecycle set sdr cleanup
+5. Activate it again to start a second, new recording:
 
-Again navigate to the `copied_bag` directory, and observe that the `test_bag`
-directory now contains all the data files of the bag, and a `metadata.yaml`
-file.
+```bash
+ros2 lifecycle set /sdr activate
+```
 
-This is a complete, usable bag.
-This can be demonstrated by stopping the `talker` node, then starting the
-`listener` node and playing the bag file.
+6. Deactivate and clean up:
 
-    ros2 run demo_nodes_cpp listener
-    ros2 bag play copied_bag/test_bag
+```bash
+ros2 lifecycle set /sdr deactivate
+ros2 lifecycle set /sdr cleanup
+```
 
-The recorded data will be echoed by the `listener` node.
+Now, navigate to your `copy_destination` directory (e.g., `/home/user/sdr_bags`). You will find a main session folder (e.g., `sdr_session_2025-07-10_03-00-00`), and inside it will be two complete, timestamped bag directories from your two recording sessions.
 
+You can play back one of the bags:
 
-## Lifecycle transition behaviours
+```bash
+ros2 bag play /home/user/sdr_bags/sdr_session_.../robot_data_...
+```
+
+## Lifecycle Transition Behaviours
 
 ### on_configure
 
-In the on_configure state, the node sets up the rosbag2 infrastructure for
-recording by creating a writer and opening the storage. It also sets up the
-worker thread that will copy files in parallel to the recording of data. A
-callback is registered with the writer so that the node will get informed each
-time a new file is created in the bag.
+Creates the main, timestamped session directory that will contain all bags recorded during this run. It also starts the background file-copying thread. **It does not start any recording.**
 
 ### on_activate
 
-In the on_activate transition, the node simply notifies the worker thread that
-it is recording. Data will be written to the bag automatically because the
-state changes to `Active`.
+Begins a **new, unique recording session**. It creates a timestamped bag, sets up a temporary storage location, initializes a `rosbag2::Writer`, and subscribes to the requested topics. Data begins being written to the temporary bag file.
 
 ### on_deactivate
 
-In the on_deactivate transition, the node simply notifies the worker thread
-that it is paused. Data will not be written to the bag because the state
-changes to `Inactive`.
+**Finalizes the current recording session**. It unsubscribes from topics, closes the `rosbag2::Writer` (which flushes all data to disk and writes the `metadata.yaml` file), and queues the final bag files to be copied to their permanent destination within the main session folder.
 
 ### on_cleanup
 
-When cleaning up, the node needs to stop recording, stop receiving data (i.e.
-unsubscribe from topics), and ensure that the final files of the bag (the last
-data file and the metadata file, which gets written when the writer object
-destructs) are copied to the destination directory.
+Ensures the last active recording session is properly deactivated and finalized. It then gracefully shuts down the background copy thread.
 
 ### on_shutdown
 
-If not already performed, the shutdown transition performs the same functions
-as the cleanup transition.
+Performs the same actions as `on_cleanup` before shutting down the node.
+
+
+---
+
+## Keyboard Commander Utility
+
+For manual control and testing, an `SDRKeyboardCommander` node is available. This node listens for keyboard presses and sends the corresponding lifecycle transition requests to the `/sdr` node.
+
+
+### Running
+
+1.  In one terminal, run your `sdr` node:
+
+    ```bash
+    ros2 launch system_data_recorder sdr_example.launch.py
+    ```
+
+2.  In a second terminal, source your workspace and run the commander:
+
+    ```bash
+    ros2 run system_data_recorder sdr_commander
+    ```
+
+### Controls
+
+Once the commander node is running and connected to the `/sdr` services, you can use the following keys to control the recorder:
+
+| Key | Action | Lifecycle Transition |
+| :--- | :--- | :--- |
+| **c** | Configure | `CONFIGURE` |
+| **a** | Activate | `ACTIVATE` (Starts recording) |
+| **d** | Deactivate | `DEACTIVATE` (Pauses recording) |
+| **l** | Cleanup | `CLEANUP` |
+| **s** | Shutdown | `SHUTDOWN` |
+| **g** | Get State | (Queries and prints the current state) |
+| **h** | Help | (Prints the help menu) |
+| **q** | Quit | (Shuts down the commander node) |
+
