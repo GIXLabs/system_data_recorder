@@ -56,4 +56,3 @@ extern "C"
 #endif
 
 #endif  // SDR__VISIBILITY_CONTROL_H_
-
